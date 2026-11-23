@@ -1,7 +1,7 @@
 import os, requests
 
 H = "https://api.dexscreener.com"
-SOGLIA = 15_000_000
+SOGLIA = 50_000
 
 def indirizzi():
     out = set()
