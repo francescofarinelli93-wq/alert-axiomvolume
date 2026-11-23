@@ -29,10 +29,13 @@ def volume_5m():
 v = volume_5m()
 print(f"Volume ultimi 5 min: {v:,.0f} $")
 
+print(f"Soglia: {SOGLIA:,}")
+
 if v >= SOGLIA:
-    requests.post(
+    r = requests.post(
         f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
         data={"chat_id": os.environ["TG_CHAT"],
               "text": f"🚀 Volume memecoin Solana (5 min): {v/1e6:.1f} mln $"},
         timeout=20,
     )
+    print("Telegram:", r.status_code, r.text)
