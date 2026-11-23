@@ -35,7 +35,7 @@ if v >= SOGLIA:
     r = requests.post(
         f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
         data={"chat_id": os.environ["TG_CHAT"],
-              "text": f"🚀 Volume memecoin Solana (5 min): {v/1e6:.1f} mln $"},
+              "text": f"🚀 Volume memecoin Solana (5 min): {v:,.0f} $"},
         timeout=20,
     )
     print("Telegram:", r.status_code, r.text)
