@@ -1,18 +1,13 @@
 import os, time, requests
 
 # ================= IMPOSTAZIONI =================
-# Una fonte "scatta" se: volume 5 min >= MIN  E  indice di picco >= MOLT.
-# Indice = volume 5 min / volume normale (x1 = norma, x2 = il doppio).
-# Il messaggio parte se ALMENO UNA fonte scatta.
-# Valori bassi per ora: poi alza MOLT (es. 2) e MIN.
-MOLT_DEX, MIN_DEX = 0.5, 10_000
-MOLT_GECKO, MIN_GECKO = 0.5, 10_000
-MOLT_JUP, MIN_JUP = 0.5, 10_000
+# Soglie sul volume in dollari degli ultimi 5 minuti, una per fonte.
+SOGLIA_DEX = 500_000
+SOGLIA_GECKO = 1_000_000
+SOGLIA_JUP = 500_000
 
-# Quante coppie/token contare per fonte (le più scambiate nell'ultima ora)
-TOP_DEX = 100
-TOP_GECKO = 100
-TOP_JUP = 100     # massimo 100
+FONTI_MINIME = 1   # quante fonti devono superare la loro soglia per avere il messaggio
+TOP = 100          # coppie/token contate per fonte
 # ================================================
 
 DEX = "https://api.dexscreener.com"
@@ -52,20 +47,14 @@ def get(url, params=None, headers=None):
     return None
 
 
-def riassumi(items, top):
-    # items: lista di (nome, volume_5m, volume_1h)
-    sel = sorted(items, key=lambda x: x[2], reverse=True)[:top]
-    v5 = sum(x[1] for x in sel)
-    v1 = sum(x[2] for x in sel)
+def riassumi(items):
+    # items: lista di (volume_5m, volume_1h); si tengono le prime TOP per volume orario
+    sel = sorted(items, key=lambda x: x[1], reverse=True)[:TOP]
+    v5 = sum(x[0] for x in sel)
+    v1 = sum(x[1] for x in sel)
     norm = max(v1 - v5, 0) / 11
     indice = v5 / norm if norm > 0 else None
-    best, extra = None, 0.0
-    for nome, m5, h1 in sel:
-        e = m5 - max(h1 - m5, 0) / 11
-        if e > extra:
-            best, extra = nome, e
-    return {"v5": v5, "v1": v1, "n": len(sel), "indice": indice,
-            "top": best, "extra": extra}
+    return {"v5": v5, "v1": v1, "n": len(sel), "indice": indice}
 
 
 def jupiter():
@@ -80,10 +69,10 @@ def jupiter():
         s1 = t.get("stats1h") or {}
         m5 = float(s5.get("buyVolume") or 0) + float(s5.get("sellVolume") or 0)
         h1 = float(s1.get("buyVolume") or 0) + float(s1.get("sellVolume") or 0)
-        items.append((t.get("symbol", "?"), m5, h1))
+        items.append((m5, h1))
         if t.get("id"):
             mints.append(t["id"])
-    return riassumi(items, TOP_JUP), mints
+    return riassumi(items), mints
 
 
 def gecko():
@@ -102,11 +91,11 @@ def gecko():
         time.sleep(2.2)
         for p in (d or {}).get("data", []):
             a = p.get("attributes", {})
-            base = a.get("name", "").split(" / ")[0].strip()
-            if p["id"] in pool or base.upper() in ESCLUDI:
+            base = a.get("name", "").split(" / ")[0].strip().upper()
+            if p["id"] in pool or base in ESCLUDI:
                 continue
             v = a.get("volume_usd") or {}
-            pool[p["id"]] = (base, float(v.get("m5") or 0), float(v.get("h1") or 0))
+            pool[p["id"]] = (float(v.get("m5") or 0), float(v.get("h1") or 0))
             try:
                 bt = p["relationships"]["base_token"]["data"]["id"]
                 mints.add(bt.replace("solana_", ""))
@@ -114,7 +103,7 @@ def gecko():
                 pass
     if not pool:
         return None, []
-    return riassumi(list(pool.values()), TOP_GECKO), list(mints)
+    return riassumi(list(pool.values())), list(mints)
 
 
 def dexscreener(extra):
@@ -129,8 +118,7 @@ def dexscreener(extra):
             if bt.get("symbol", "").upper() in ESCLUDI:
                 continue
             v = p.get("volume") or {}
-            coppie[p["pairAddress"]] = (bt.get("symbol", "?"),
-                                        float(v.get("m5") or 0),
+            coppie[p["pairAddress"]] = (float(v.get("m5") or 0),
                                         float(v.get("h1") or 0))
             if bt.get("address"):
                 indirizzi.add(bt["address"])
@@ -152,7 +140,7 @@ def dexscreener(extra):
         time.sleep(0.3)
     if not coppie:
         return None
-    return riassumi(list(coppie.values()), TOP_DEX)
+    return riassumi(list(coppie.values()))
 
 
 def invia(testo):
@@ -163,29 +151,16 @@ def invia(testo):
         print("Telegram errore", e)
 
 
-def scatta(r, molt, minimo):
-    return bool(r) and r["v5"] >= minimo and r["indice"] is not None \
-        and r["indice"] >= molt
+def scatta(r, soglia):
+    return bool(r) and r["v5"] >= soglia
 
 
-def riga(emoji, nome, r, molt, minimo):
+def riga(emoji, r, soglia):
     if not r:
-        return f"⚠️ {emoji} {nome}: non disponibile"
-    ind = f"×{r['indice']:.1f}" if r["indice"] is not None else "×n/d"
-    fuoco = " 🔥" if scatta(r, molt, minimo) else ""
-    testo = f"{emoji} {nome}: {r['v5']:,.0f} $ ({ind}){fuoco}"
-    if r["top"]:
-        testo += f"\n   ↳ {r['top']} +{r['extra']:,.0f} $"
-    return testo
-
-
-def log(nome, r):
-    if not r:
-        print(f"[log] {nome}: non disponibile")
-        return
-    ind = f"{r['indice']:.2f}" if r["indice"] is not None else "n/d"
-    print(f"[log] {nome}: 5min={r['v5']:,.0f} | 1h={r['v1']:,.0f} | "
-          f"elementi={r['n']} | indice={ind}")
+        return f"{emoji} non disponibile"
+    ind = f"×{r['indice']:.1f}" if r["indice"] is not None else "×–"
+    fuoco = " 🔥" if scatta(r, soglia) else ""
+    return f"{emoji} {r['v5']:,.0f} $ {ind}{fuoco}"
 
 
 rj = rg = rd = None
@@ -203,14 +178,23 @@ try:
 except Exception as e:
     print("DexScreener errore", e)
 
-for nome, r in (("DexScreener", rd), ("GeckoTerminal", rg), ("Jupiter", rj)):
-    log(nome, r)
+fonti = [("🦅", "DexScreener", rd, SOGLIA_DEX),
+         ("🦎", "GeckoTerminal", rg, SOGLIA_GECKO),
+         ("🪐", "Jupiter", rj, SOGLIA_JUP)]
+for emoji, nome, r, soglia in fonti:
+    if r:
+        ind = f"{r['indice']:.2f}" if r["indice"] is not None else "n/d"
+        print(f"[log] {nome}: 5min={r['v5']:,.0f} | 1h={r['v1']:,.0f} | "
+              f"elementi={r['n']} | indice={ind} | soglia={soglia:,} | "
+              f"scattata={scatta(r, soglia)}")
+    else:
+        print(f"[log] {nome}: non disponibile")
 
-if scatta(rd, MOLT_DEX, MIN_DEX) or scatta(rg, MOLT_GECKO, MIN_GECKO) \
-        or scatta(rj, MOLT_JUP, MIN_JUP):
-    righe = [riga("🦅", "DexScreener", rd, MOLT_DEX, MIN_DEX),
-             riga("🦎", "GeckoTerminal", rg, MOLT_GECKO, MIN_GECKO),
-             riga("🪐", "Jupiter", rj, MOLT_JUP, MIN_JUP)]
-    invia("🚀 PICCO DI VOLUME, Solana ultimi 5 min\n" + "\n".join(righe))
+conta = sum(1 for _, _, r, s in fonti if scatta(r, s))
+print(f"[log] fonti sopra soglia: {conta} su 3 (servono {FONTI_MINIME})")
+
+if conta >= FONTI_MINIME:
+    righe = [riga(e, r, s) for e, _, r, s in fonti]
+    invia("🚀🌪️ SOLANA VOLUME, a 5 min\n" + "\n".join(righe))
 else:
-    print("Nessun picco, nessun messaggio")
+    print("NO ACTION, nessun messaggio")
