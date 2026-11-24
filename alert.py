@@ -1,12 +1,18 @@
 import os, time, requests
 
-# ================= SOGLIE =================
-# Volume in dollari negli ultimi 5 minuti.
+# ================= IMPOSTAZIONI =================
+# Soglie: volume in dollari negli ultimi 5 minuti.
 # Il messaggio parte se ALMENO UNA fonte supera la sua soglia.
-SOGLIA_DEX = 10_000       # DexScreener
-SOGLIA_GECKO = 100_000    # GeckoTerminal
-SOGLIA_JUP = 100_000      # Jupiter
-# ==========================================
+SOGLIA_DEX = 10_000
+SOGLIA_GECKO = 100_000
+SOGLIA_JUP = 100_000
+
+# Quante coppie/token contare per fonte (le più scambiate).
+# Un numero fisso rende i volumi confrontabili nel tempo.
+TOP_DEX = 100
+TOP_GECKO = 100
+TOP_JUP = 100     # massimo 100
+# ================================================
 
 DEX = "https://api.dexscreener.com"
 GECKO = "https://api.geckoterminal.com/api/v2"
@@ -51,13 +57,14 @@ def jupiter():
     data = get(f"{JUP}/toptraded/5m", {"limit": 100}, h)
     if not isinstance(data, list):
         return None, 0, []
-    tot, mints = 0.0, []
+    vol, mints = [], []
     for t in data:
         s = t.get("stats5m") or {}
-        tot += float(s.get("buyVolume") or 0) + float(s.get("sellVolume") or 0)
+        vol.append(float(s.get("buyVolume") or 0) + float(s.get("sellVolume") or 0))
         if t.get("id"):
             mints.append(t["id"])
-    return tot, len(data), mints
+    top = sorted(vol, reverse=True)[:TOP_JUP]
+    return sum(top), len(top), mints
 
 
 def gecko():
@@ -70,23 +77,23 @@ def gecko():
         richieste.append(("pools", {"page": pg, "sort": "h24_tx_count_desc"}))
     for pg in range(1, 3):
         richieste.append(("new_pools", {"page": pg}))
-    tot, visti, mints = 0.0, set(), set()
+    pool_vol, mints = {}, set()
     for nome, params in richieste:
         d = get(f"{GECKO}/networks/solana/{nome}", params)
         time.sleep(2.2)
         for pool in (d or {}).get("data", []):
             a = pool.get("attributes", {})
             base = a.get("name", "").split(" / ")[0].strip().upper()
-            if pool["id"] in visti or base in ESCLUDI:
+            if pool["id"] in pool_vol or base in ESCLUDI:
                 continue
-            visti.add(pool["id"])
-            tot += float((a.get("volume_usd") or {}).get("m5") or 0)
+            pool_vol[pool["id"]] = float((a.get("volume_usd") or {}).get("m5") or 0)
             try:
                 bt = pool["relationships"]["base_token"]["data"]["id"]
                 mints.add(bt.replace("solana_", ""))
             except Exception:
                 pass
-    return tot, len(visti), list(mints)
+    top = sorted(pool_vol.values(), reverse=True)[:TOP_GECKO]
+    return sum(top), len(top), list(mints)
 
 
 def dexscreener(extra):
@@ -119,7 +126,8 @@ def dexscreener(extra):
     for i in range(0, len(lista), 30):
         aggiungi(get(f"{DEX}/tokens/v1/solana/{','.join(lista[i:i+30])}"))
         time.sleep(0.3)
-    return sum(coppie.values()), len(coppie)
+    top = sorted(coppie.values(), reverse=True)[:TOP_DEX]
+    return sum(top), len(top)
 
 
 def invia(testo):
@@ -130,11 +138,11 @@ def invia(testo):
         print("Telegram errore", e)
 
 
-def riga(nome, v, n, soglia, unita):
+def riga(emoji, nome, v, n, soglia):
     if v is None:
-        return f"⚠️ {nome}: non disponibile"
-    segno = "🔥" if v >= soglia else "▫️"
-    return f"{segno} {nome}: {v:,.0f} $ ({n} {unita}), soglia {soglia:,}"
+        return f"⚠️ {emoji} {nome}: non disponibile"
+    fuoco = " 🔥" if v >= soglia else ""
+    return f"{emoji} {nome}: {v:,.0f} $ (top {n}){fuoco}"
 
 
 jv = jn = gv = gn = dv = dn = None
@@ -153,11 +161,12 @@ except Exception as e:
     print("DexScreener errore", e)
 
 righe = [
-    riga("DexScreener", dv, dn, SOGLIA_DEX, "coppie"),
-    riga("GeckoTerminal", gv, gn, SOGLIA_GECKO, "pool"),
-    riga("Jupiter", jv, jn, SOGLIA_JUP, "token"),
+    riga("🦅", "DexScreener", dv, dn, SOGLIA_DEX),
+    riga("🦎", "GeckoTerminal", gv, gn, SOGLIA_GECKO),
+    riga("🪐", "Jupiter", jv, jn, SOGLIA_JUP),
 ]
 print("\n".join(righe))
+print(f"Soglie: dex {SOGLIA_DEX:,} | gecko {SOGLIA_GECKO:,} | jupiter {SOGLIA_JUP:,}")
 
 scatta = any(v is not None and v >= s for v, s in
              ((dv, SOGLIA_DEX), (gv, SOGLIA_GECKO), (jv, SOGLIA_JUP)))
