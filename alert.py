@@ -54,7 +54,8 @@ def riassumi(items):
     v1 = sum(x[1] for x in sel)
     norm = max(v1 - v5, 0) / 11
     indice = v5 / norm if norm > 0 else None
-    return {"v5": v5, "v1": v1, "n": len(sel), "indice": indice}
+    return {"v5": v5, "v1": v1, "n": len(sel), "tot": len(items),
+            "indice": indice}
 
 
 def jupiter():
@@ -160,7 +161,7 @@ def riga(emoji, r, soglia):
         return f"{emoji} non disponibile"
     ind = f"×{r['indice']:.1f}" if r["indice"] is not None else "×–"
     fuoco = " 🔥" if scatta(r, soglia) else ""
-    return f"{emoji} {r['v5']:,.0f} $ {ind}{fuoco}"
+    return f"{emoji} {r['v5']:,.0f} $ {ind}{fuoco} ({r['tot']})"
 
 
 rj = rg = rd = None
@@ -185,8 +186,8 @@ for emoji, nome, r, soglia in fonti:
     if r:
         ind = f"{r['indice']:.2f}" if r["indice"] is not None else "n/d"
         print(f"[log] {nome}: 5min={r['v5']:,.0f} | 1h={r['v1']:,.0f} | "
-              f"elementi={r['n']} | indice={ind} | soglia={soglia:,} | "
-              f"scattata={scatta(r, soglia)}")
+              f"contati={r['n']}/{r['tot']} | indice={ind} | "
+              f"soglia={soglia:,} | scattata={scatta(r, soglia)}")
     else:
         print(f"[log] {nome}: non disponibile")
 
@@ -195,6 +196,6 @@ print(f"[log] fonti sopra soglia: {conta} su 3 (servono {FONTI_MINIME})")
 
 if conta >= FONTI_MINIME:
     righe = [riga(e, r, s) for e, _, r, s in fonti]
-    invia("🚀🌪️ SOLANA VOLUME, a 5 min\n" + "\n".join(righe))
+    invia("🚀🌪️ SOLANA VOLUME, a 5 min:\n" + "\n".join(righe))
 else:
     print("NO ACTION, nessun messaggio")
