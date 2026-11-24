@@ -7,7 +7,7 @@ SOGLIA_GECKO = 1_000_000
 SOGLIA_JUP = 500_000
 
 FONTI_MINIME = 1   # quante fonti devono superare la loro soglia per avere il messaggio
-TOP = 100          # coppie/token contate per fonte
+TOP = 100          # i token con più volume contati per fonte
 # ================================================
 
 DEX = "https://api.dexscreener.com"
@@ -48,13 +48,20 @@ def get(url, params=None, headers=None):
 
 
 def riassumi(items):
-    # items: lista di (volume_5m, volume_1h); si tengono le prime TOP per volume orario
-    sel = sorted(items, key=lambda x: x[1], reverse=True)[:TOP]
+    # items: lista di (token, volume_5m, volume_1h).
+    # Le coppie dello stesso token si sommano; poi si tengono i TOP token
+    # con più volume orario.
+    tok = {}
+    for k, m5, h1 in items:
+        a = tok.setdefault(k, [0.0, 0.0])
+        a[0] += m5
+        a[1] += h1
+    sel = sorted(tok.values(), key=lambda x: x[1], reverse=True)[:TOP]
     v5 = sum(x[0] for x in sel)
     v1 = sum(x[1] for x in sel)
     norm = max(v1 - v5, 0) / 11
     indice = v5 / norm if norm > 0 else None
-    return {"v5": v5, "v1": v1, "n": len(sel), "tot": len(items),
+    return {"v5": v5, "v1": v1, "n": len(sel), "tot": len(tok),
             "indice": indice}
 
 
@@ -65,12 +72,12 @@ def jupiter():
     if not isinstance(data, list):
         return None, []
     items, mints = [], []
-    for t in data:
+    for i, t in enumerate(data):
         s5 = t.get("stats5m") or {}
         s1 = t.get("stats1h") or {}
         m5 = float(s5.get("buyVolume") or 0) + float(s5.get("sellVolume") or 0)
         h1 = float(s1.get("buyVolume") or 0) + float(s1.get("sellVolume") or 0)
-        items.append((m5, h1))
+        items.append((t.get("id") or f"j{i}", m5, h1))
         if t.get("id"):
             mints.append(t["id"])
     return riassumi(items), mints
@@ -96,12 +103,13 @@ def gecko():
             if p["id"] in pool or base in ESCLUDI:
                 continue
             v = a.get("volume_usd") or {}
-            pool[p["id"]] = (float(v.get("m5") or 0), float(v.get("h1") or 0))
             try:
-                bt = p["relationships"]["base_token"]["data"]["id"]
-                mints.add(bt.replace("solana_", ""))
+                tok = p["relationships"]["base_token"]["data"]["id"]
+                tok = tok.replace("solana_", "")
+                mints.add(tok)
             except Exception:
-                pass
+                tok = p["id"]
+            pool[p["id"]] = (tok, float(v.get("m5") or 0), float(v.get("h1") or 0))
     if not pool:
         return None, []
     return riassumi(list(pool.values())), list(mints)
@@ -119,7 +127,8 @@ def dexscreener(extra):
             if bt.get("symbol", "").upper() in ESCLUDI:
                 continue
             v = p.get("volume") or {}
-            coppie[p["pairAddress"]] = (float(v.get("m5") or 0),
+            tok = bt.get("address") or p["pairAddress"]
+            coppie[p["pairAddress"]] = (tok, float(v.get("m5") or 0),
                                         float(v.get("h1") or 0))
             if bt.get("address"):
                 indirizzi.add(bt["address"])
@@ -186,7 +195,7 @@ for emoji, nome, r, soglia in fonti:
     if r:
         ind = f"{r['indice']:.2f}" if r["indice"] is not None else "n/d"
         print(f"[log] {nome}: 5min={r['v5']:,.0f} | 1h={r['v1']:,.0f} | "
-              f"contati={r['n']}/{r['tot']} | indice={ind} | "
+              f"token contati={r['n']}/{r['tot']} | indice={ind} | "
               f"soglia={soglia:,} | scattata={scatta(r, soglia)}")
     else:
         print(f"[log] {nome}: non disponibile")
