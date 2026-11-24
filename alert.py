@@ -156,12 +156,12 @@ def scatta(r, soglia):
     return bool(r) and r["v5"] >= soglia
 
 
-def riga(emoji, r, soglia):
+def riga(emoji, nome, r, soglia):
     if not r:
-        return f"{emoji} non disponibile"
+        return f"{emoji} {nome}: non disponibile"
     ind = f"×{r['indice']:.1f}" if r["indice"] is not None else "×–"
     fuoco = " 🔥" if scatta(r, soglia) else ""
-    return f"{emoji} {r['v5']:,.0f} $ {ind}{fuoco} ({r['tot']})"
+    return f"{emoji} {nome}: {r['v5']:,.0f} $ {ind}{fuoco} ({r['tot']})"
 
 
 rj = rg = rd = None
@@ -179,8 +179,8 @@ try:
 except Exception as e:
     print("DexScreener errore", e)
 
-fonti = [("🦅", "DexScreener", rd, SOGLIA_DEX),
-         ("🦎", "GeckoTerminal", rg, SOGLIA_GECKO),
+fonti = [("🦅", "Dex", rd, SOGLIA_DEX),
+         ("🦎", "Gecko", rg, SOGLIA_GECKO),
          ("🪐", "Jupiter", rj, SOGLIA_JUP)]
 for emoji, nome, r, soglia in fonti:
     if r:
@@ -195,7 +195,7 @@ conta = sum(1 for _, _, r, s in fonti if scatta(r, s))
 print(f"[log] fonti sopra soglia: {conta} su 3 (servono {FONTI_MINIME})")
 
 if conta >= FONTI_MINIME:
-    righe = [riga(e, r, s) for e, _, r, s in fonti]
-    invia("🚀🌪️ SOLANA VOLUME, a 5 min:\n" + "\n".join(righe))
+    righe = [riga(e, n, r, s) for e, n, r, s in fonti]
+    invia("🚀🌪️ SOLANA VOLUME, a 5 min:\n\n" + "\n".join(righe))
 else:
     print("NO ACTION, nessun messaggio")
