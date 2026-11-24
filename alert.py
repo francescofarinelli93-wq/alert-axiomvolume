@@ -1,14 +1,15 @@
 import os, time, requests
 
 # ================= IMPOSTAZIONI =================
-# Soglie: volume in dollari negli ultimi 5 minuti.
-# Il messaggio parte se ALMENO UNA fonte supera la sua soglia.
-SOGLIA_DEX = 10_000
-SOGLIA_GECKO = 100_000
-SOGLIA_JUP = 100_000
+# Una fonte "scatta" se: volume 5 min >= MIN  E  indice di picco >= MOLT.
+# Indice = volume 5 min / volume normale (x1 = norma, x2 = il doppio).
+# Il messaggio parte se ALMENO UNA fonte scatta.
+# Valori bassi per ora: poi alza MOLT (es. 2) e MIN.
+MOLT_DEX, MIN_DEX = 0.5, 10_000
+MOLT_GECKO, MIN_GECKO = 0.5, 10_000
+MOLT_JUP, MIN_JUP = 0.5, 10_000
 
-# Quante coppie/token contare per fonte (le più scambiate).
-# Un numero fisso rende i volumi confrontabili nel tempo.
+# Quante coppie/token contare per fonte (le più scambiate nell'ultima ora)
 TOP_DEX = 100
 TOP_GECKO = 100
 TOP_JUP = 100     # massimo 100
@@ -51,20 +52,38 @@ def get(url, params=None, headers=None):
     return None
 
 
+def riassumi(items, top):
+    # items: lista di (nome, volume_5m, volume_1h)
+    sel = sorted(items, key=lambda x: x[2], reverse=True)[:top]
+    v5 = sum(x[1] for x in sel)
+    v1 = sum(x[2] for x in sel)
+    norm = max(v1 - v5, 0) / 11
+    indice = v5 / norm if norm > 0 else None
+    best, extra = None, 0.0
+    for nome, m5, h1 in sel:
+        e = m5 - max(h1 - m5, 0) / 11
+        if e > extra:
+            best, extra = nome, e
+    return {"v5": v5, "v1": v1, "n": len(sel), "indice": indice,
+            "top": best, "extra": extra}
+
+
 def jupiter():
     chiave = os.environ.get("JUP_KEY")
     h = {"x-api-key": chiave} if chiave else None
-    data = get(f"{JUP}/toptraded/5m", {"limit": 100}, h)
+    data = get(f"{JUP}/toptraded/1h", {"limit": 100}, h)
     if not isinstance(data, list):
-        return None, 0, []
-    vol, mints = [], []
+        return None, []
+    items, mints = [], []
     for t in data:
-        s = t.get("stats5m") or {}
-        vol.append(float(s.get("buyVolume") or 0) + float(s.get("sellVolume") or 0))
+        s5 = t.get("stats5m") or {}
+        s1 = t.get("stats1h") or {}
+        m5 = float(s5.get("buyVolume") or 0) + float(s5.get("sellVolume") or 0)
+        h1 = float(s1.get("buyVolume") or 0) + float(s1.get("sellVolume") or 0)
+        items.append((t.get("symbol", "?"), m5, h1))
         if t.get("id"):
             mints.append(t["id"])
-    top = sorted(vol, reverse=True)[:TOP_JUP]
-    return sum(top), len(top), mints
+    return riassumi(items, TOP_JUP), mints
 
 
 def gecko():
@@ -77,23 +96,25 @@ def gecko():
         richieste.append(("pools", {"page": pg, "sort": "h24_tx_count_desc"}))
     for pg in range(1, 3):
         richieste.append(("new_pools", {"page": pg}))
-    pool_vol, mints = {}, set()
+    pool, mints = {}, set()
     for nome, params in richieste:
         d = get(f"{GECKO}/networks/solana/{nome}", params)
         time.sleep(2.2)
-        for pool in (d or {}).get("data", []):
-            a = pool.get("attributes", {})
-            base = a.get("name", "").split(" / ")[0].strip().upper()
-            if pool["id"] in pool_vol or base in ESCLUDI:
+        for p in (d or {}).get("data", []):
+            a = p.get("attributes", {})
+            base = a.get("name", "").split(" / ")[0].strip()
+            if p["id"] in pool or base.upper() in ESCLUDI:
                 continue
-            pool_vol[pool["id"]] = float((a.get("volume_usd") or {}).get("m5") or 0)
+            v = a.get("volume_usd") or {}
+            pool[p["id"]] = (base, float(v.get("m5") or 0), float(v.get("h1") or 0))
             try:
-                bt = pool["relationships"]["base_token"]["data"]["id"]
+                bt = p["relationships"]["base_token"]["data"]["id"]
                 mints.add(bt.replace("solana_", ""))
             except Exception:
                 pass
-    top = sorted(pool_vol.values(), reverse=True)[:TOP_GECKO]
-    return sum(top), len(top), list(mints)
+    if not pool:
+        return None, []
+    return riassumi(list(pool.values()), TOP_GECKO), list(mints)
 
 
 def dexscreener(extra):
@@ -107,7 +128,10 @@ def dexscreener(extra):
             bt = p.get("baseToken") or {}
             if bt.get("symbol", "").upper() in ESCLUDI:
                 continue
-            coppie[p["pairAddress"]] = float((p.get("volume") or {}).get("m5") or 0)
+            v = p.get("volume") or {}
+            coppie[p["pairAddress"]] = (bt.get("symbol", "?"),
+                                        float(v.get("m5") or 0),
+                                        float(v.get("h1") or 0))
             if bt.get("address"):
                 indirizzi.add(bt["address"])
 
@@ -126,8 +150,9 @@ def dexscreener(extra):
     for i in range(0, len(lista), 30):
         aggiungi(get(f"{DEX}/tokens/v1/solana/{','.join(lista[i:i+30])}"))
         time.sleep(0.3)
-    top = sorted(coppie.values(), reverse=True)[:TOP_DEX]
-    return sum(top), len(top)
+    if not coppie:
+        return None
+    return riassumi(list(coppie.values()), TOP_DEX)
 
 
 def invia(testo):
@@ -138,39 +163,54 @@ def invia(testo):
         print("Telegram errore", e)
 
 
-def riga(emoji, nome, v, n, soglia):
-    if v is None:
+def scatta(r, molt, minimo):
+    return bool(r) and r["v5"] >= minimo and r["indice"] is not None \
+        and r["indice"] >= molt
+
+
+def riga(emoji, nome, r, molt, minimo):
+    if not r:
         return f"⚠️ {emoji} {nome}: non disponibile"
-    fuoco = " 🔥" if v >= soglia else ""
-    return f"{emoji} {nome}: {v:,.0f} $ (top {n}){fuoco}"
+    ind = f"×{r['indice']:.1f}" if r["indice"] is not None else "×n/d"
+    fuoco = " 🔥" if scatta(r, molt, minimo) else ""
+    testo = f"{emoji} {nome}: {r['v5']:,.0f} $ ({ind}){fuoco}"
+    if r["top"]:
+        testo += f"\n   ↳ {r['top']} +{r['extra']:,.0f} $"
+    return testo
 
 
-jv = jn = gv = gn = dv = dn = None
+def log(nome, r):
+    if not r:
+        print(f"[log] {nome}: non disponibile")
+        return
+    ind = f"{r['indice']:.2f}" if r["indice"] is not None else "n/d"
+    print(f"[log] {nome}: 5min={r['v5']:,.0f} | 1h={r['v1']:,.0f} | "
+          f"elementi={r['n']} | indice={ind}")
+
+
+rj = rg = rd = None
 jm, gm = [], []
 try:
-    jv, jn, jm = jupiter()
+    rj, jm = jupiter()
 except Exception as e:
     print("Jupiter errore", e)
 try:
-    gv, gn, gm = gecko()
+    rg, gm = gecko()
 except Exception as e:
     print("Gecko errore", e)
 try:
-    dv, dn = dexscreener(set(jm) | set(gm))
+    rd = dexscreener(set(jm) | set(gm))
 except Exception as e:
     print("DexScreener errore", e)
 
-righe = [
-    riga("🦅", "DexScreener", dv, dn, SOGLIA_DEX),
-    riga("🦎", "GeckoTerminal", gv, gn, SOGLIA_GECKO),
-    riga("🪐", "Jupiter", jv, jn, SOGLIA_JUP),
-]
-print("\n".join(righe))
-print(f"Soglie: dex {SOGLIA_DEX:,} | gecko {SOGLIA_GECKO:,} | jupiter {SOGLIA_JUP:,}")
+for nome, r in (("DexScreener", rd), ("GeckoTerminal", rg), ("Jupiter", rj)):
+    log(nome, r)
 
-scatta = any(v is not None and v >= s for v, s in
-             ((dv, SOGLIA_DEX), (gv, SOGLIA_GECKO), (jv, SOGLIA_JUP)))
-if scatta:
-    invia("🚀 MERCATO HOT, Solana ultimi 5 min\n" + "\n".join(righe))
+if scatta(rd, MOLT_DEX, MIN_DEX) or scatta(rg, MOLT_GECKO, MIN_GECKO) \
+        or scatta(rj, MOLT_JUP, MIN_JUP):
+    righe = [riga("🦅", "DexScreener", rd, MOLT_DEX, MIN_DEX),
+             riga("🦎", "GeckoTerminal", rg, MOLT_GECKO, MIN_GECKO),
+             riga("🪐", "Jupiter", rj, MOLT_JUP, MIN_JUP)]
+    invia("🚀 PICCO DI VOLUME, Solana ultimi 5 min\n" + "\n".join(righe))
 else:
-    print("Nessuna soglia superata, nessun messaggio")
+    print("Nessun picco, nessun messaggio")
