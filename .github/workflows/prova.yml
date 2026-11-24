@@ -1,15 +1,22 @@
-name: prova
+name: alert
 on:
   workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: alert
+  cancel-in-progress: false
 jobs:
-  prova:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install playwright
-      - run: python -m playwright install --with-deps chromium
-      - run: python prova.py
+      - run: pip install requests
+      - run: python alert.py
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
