@@ -2,9 +2,9 @@ import os, time, requests
 
 # ================= IMPOSTAZIONI =================
 # Soglie sul volume in dollari degli ultimi 5 minuti, una per fonte.
-SOGLIA_DEX = 500_000
-SOGLIA_GECKO = 1_000_000
-SOGLIA_JUP = 500_000
+SOGLIA_DEX = 6_500_000
+SOGLIA_GECKO = 7_500_000
+SOGLIA_JUP = 2_500_000
 
 FONTI_MINIME = 1   # quante fonti devono superare la loro soglia per avere il messaggio
 TOP = 100          # i token con più volume contati per fonte
