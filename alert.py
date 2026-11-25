@@ -3,7 +3,7 @@ import os, time, requests
 # ================= IMPOSTAZIONI =================
 # Soglie sul volume in dollari degli ultimi 5 minuti, una per fonte.
 SOGLIA_DEX = 1_500_000
-SOGLIA_JUP = 2_500_000
+SOGLIA_JUP = 500_000
 
 FONTI_MINIME = 1   # quante fonti devono superare la loro soglia (1 o 2)
 TOP = 100          # i token con più volume contati per fonte
