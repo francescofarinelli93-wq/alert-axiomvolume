@@ -3,15 +3,13 @@ import os, time, requests
 # ================= IMPOSTAZIONI =================
 # Soglie sul volume in dollari degli ultimi 5 minuti, una per fonte.
 SOGLIA_DEX = 6_500_000
-SOGLIA_GECKO = 7_500_000
 SOGLIA_JUP = 2_500_000
 
-FONTI_MINIME = 1   # quante fonti devono superare la loro soglia per avere il messaggio
+FONTI_MINIME = 1   # quante fonti devono superare la loro soglia (1 o 2)
 TOP = 100          # i token con più volume contati per fonte
 # ================================================
 
 DEX = "https://api.dexscreener.com"
-GECKO = "https://api.geckoterminal.com/api/v2"
 JUP = "https://api.jup.ag/tokens/v2"
 TG = f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage"
 CHAT = os.environ["TG_CHAT"]
@@ -83,38 +81,6 @@ def jupiter():
     return riassumi(items), mints
 
 
-def gecko():
-    richieste = []
-    for pg in range(1, 4):
-        richieste.append(("trending_pools", {"duration": "5m", "page": pg}))
-    for pg in range(1, 9):
-        richieste.append(("pools", {"page": pg, "sort": "h24_volume_usd_desc"}))
-    for pg in range(1, 5):
-        richieste.append(("pools", {"page": pg, "sort": "h24_tx_count_desc"}))
-    for pg in range(1, 3):
-        richieste.append(("new_pools", {"page": pg}))
-    pool, mints = {}, set()
-    for nome, params in richieste:
-        d = get(f"{GECKO}/networks/solana/{nome}", params)
-        time.sleep(2.2)
-        for p in (d or {}).get("data", []):
-            a = p.get("attributes", {})
-            base = a.get("name", "").split(" / ")[0].strip().upper()
-            if p["id"] in pool or base in ESCLUDI:
-                continue
-            v = a.get("volume_usd") or {}
-            try:
-                tok = p["relationships"]["base_token"]["data"]["id"]
-                tok = tok.replace("solana_", "")
-                mints.add(tok)
-            except Exception:
-                tok = p["id"]
-            pool[p["id"]] = (tok, float(v.get("m5") or 0), float(v.get("h1") or 0))
-    if not pool:
-        return None, []
-    return riassumi(list(pool.values())), list(mints)
-
-
 def dexscreener(extra):
     coppie = {}
     indirizzi = set(extra)
@@ -173,23 +139,18 @@ def riga(emoji, nome, r, soglia):
     return f"{emoji} {nome}: {r['v5']:,.0f} $ {ind}{fuoco} ({r['tot']})"
 
 
-rj = rg = rd = None
-jm, gm = [], []
+rj = rd = None
+jm = []
 try:
     rj, jm = jupiter()
 except Exception as e:
     print("Jupiter errore", e)
 try:
-    rg, gm = gecko()
-except Exception as e:
-    print("Gecko errore", e)
-try:
-    rd = dexscreener(set(jm) | set(gm))
+    rd = dexscreener(set(jm))
 except Exception as e:
     print("DexScreener errore", e)
 
 fonti = [("🦅", "Dex", rd, SOGLIA_DEX),
-         ("🦎", "Gecko", rg, SOGLIA_GECKO),
          ("🪐", "Jupiter", rj, SOGLIA_JUP)]
 for emoji, nome, r, soglia in fonti:
     if r:
@@ -201,7 +162,7 @@ for emoji, nome, r, soglia in fonti:
         print(f"[log] {nome}: non disponibile")
 
 conta = sum(1 for _, _, r, s in fonti if scatta(r, s))
-print(f"[log] fonti sopra soglia: {conta} su 3 (servono {FONTI_MINIME})")
+print(f"[log] fonti sopra soglia: {conta} su 2 (servono {FONTI_MINIME})")
 
 if conta >= FONTI_MINIME:
     righe = [riga(e, n, r, s) for e, n, r, s in fonti]
